@@ -1,0 +1,121 @@
+# Рабочий код под NDA, поэтому просто абстрактный пример
+system_prompt = f"""
+# РОЛЬ И ЦЕЛЬ
+Ты — Compliance аналитик, специализированный AI-ассистент для сотрудника банка для оценки операции клиента.
+Твоя главная задача — оценить операцию на вероятность признания ее сомнительной и проводимой в целях легализации преступных доходов. В анализе клиентских кейсов, быстро и точно извлекая информацию из внутренних банковских систем.
+Ты должен действовать как эксперт-аналитик, который предоставляет только фактические данные. Сформулировать решение по результатам анализа.
+# КОНТЕКСТ
+В начале каждого сеанса работы с кейсом тебе доступна следующая информация:
+1.    Описание операции {case}
+
+# ДОСТУПНЫЕ ФУНКЦИИ
+
+feature1 - джойнит фичу1 к кейсу по его инн
+feature2 - джойнит фичу2 к кейсу по его инн
+get_few_shot - на основе feature1, feature2 получает эмбеддинг кейса, сравнивает его с помощью косинусного расстояния с другими эмббединга классов заключений и выдают максимально похожий пример для этого кейса
+
+# ПОРЯДОК РАБОТЫ
+
+При получении запроса от пользователя, ты должен строго следовать этой схеме:
+1.    Анализ запроса: Внимательно проанализируй вопрос пользователя. Определи, какая именно информация требуется- показатели риска.
+2.    Извлечение данных: Точечно извлекай данные из указанных источников. Обращай внимание на конкретные строки, разделы и поля, как указано в примерах:
+5.    Синтез и формирование ответа:
+-   Скомбинируй информацию из разных источников, если это необходимо для полного ответа.
+-   Если количество факторов для признания операции выскорисковой недостаточно, то не формируй мотивированное суждение, напиши, что нет причин для отказа в проведении операции.
+# ПРАВИЛА И ОГРАНИЧЕНИЯ
+-    Фактологичность: Твои ответы должны быть основаны исключительно на данных из предоставленных систем и документов. Категорически запрещено делать предположения, додумывать информацию или использовать внешние знания, не относящиеся к кейсу.
+-    Объективность: Не давай собственных оценок, мнений или рекомендаций. Твоя задача — предоставить факты, а выводы делает сотрудник банка. Используй только найденный факты.
+-    Точность: Будь предельно точен в цифрах, датах, наименованиях и ФИО.
+
+## Пример ответов для задачи формирования отчет о предоставленных документах
+Используй пример {few_shot} похожий конктрено на эту операцию
+"""
+def pretty_print_message(message, indent=False):
+    pretty_message = message.pretty_repr(html=True)
+    if not indent:
+        print(pretty_message)
+        return
+    indented = "\n".join("\t" + c for c in pretty_message.split("\n"))
+    print(indented)
+def pretty_print_messages(update, last_message=False):
+    is_subgraph = False
+    if isinstance(update, tuple):
+        ns, update = update
+        if len(ns) == 0:
+            return
+
+        graph_id = ns[-1].split(":")[0]
+        print(f"Update from subgraph {graph_id}:")
+        print("\n")
+        is_subgraph = True
+
+    for node_name, node_update in update.items():
+        update_label = f"Update from node {node_name}:"
+        if is_subgraph:
+            update_label = "\t" + update_label
+
+        print(update_label)
+        print("\n")
+
+        messages = convert_to_messages(node_update["messages"])
+        if last_message:
+            messages = messages[-1:]
+        for m in messages:
+            pretty_print_message(m, indent=is_subgraph)
+        print("\n")
+
+def ask_agent(agent, text, session_id=None, agent_prefix=None, print_dialog=True):
+    message_list = []
+    if session_id is None:
+        session_id = datetime.datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
+        if agent_prefix is None:
+            agent_prefix = 'agent'
+        session_id = f"{agent_prefix}_{session_id}"
+    print(f"{datetime.datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}: session_id = {session_id}")
+    
+    for chunk in agent.stream(
+        {"messages": [{"role": "user", 'content': text}]},
+        config={'configurable': {'thread_id': session_id}}
+    ):
+        
+        for node_name, node_update in chunk.items():
+            messages = convert_to_messages(node_update["messages"])
+            for message in messages:
+                message_data = {
+                    'session_id': session_id,
+                    'node_name': node_name,
+                    'content': message.content,
+                    'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                message_list.append(message_data)
+        if not print_dialog:
+            continue
+        pretty_print_messages(chunk)
+
+    messages_df = pd.DataFrame(message_list)
+    return session_id, messages_df
+
+tools = [
+feature1, feature2, get_few_shot
+]
+giga = GigaChat(
+    base_url=url
+    cert_file=cert
+    key_file=key
+    verify_ssl_certs=False,
+    model='GigaChat',
+    profanity_check=False,
+)
+agent = create_react_agent(
+    model=giga,
+    tools=tools,
+    checkpointer=MemorySaver(),
+    prompt=system_prompt1,
+)
+for idx in range(0,test_cases.shape[0]):
+    c = test_cases.iloc[idx]
+    case = c[['id_oper', 'inn', 'date',]].to_json(force_ascii=False, orient='records')
+    q1 = f'Сформируй решение о {case} '
+    temp_df = c[['id_oper','inn','date',]].to_frame().T
+    id_, message = ask_agent(agent, q1, session_id=None, agent_prefix='agent')
+    temp_df['ai_conclusion'] = message.iloc[-1].content
